@@ -752,6 +752,114 @@
     }
 
     // Math & Markdown rendering
+
+    // Bulletproof Rich Text & Markdown Formatter
+    function renderRich(text, inline = false) {
+      if (!text) return '';
+      let str = String(text).trim();
+
+      // Clean trailing horizontal rules
+      str = str.replace(/(\n|\r)+\s*---\s*$/g, '').replace(/\s*---\s*$/g, '');
+      // Convert asterisk bullet points (* item) to dash bullet points (- item)
+      str = str.replace(/^\s*\*\s+/gm, '- ');
+
+      // Protect LaTeX Math blocks ($$...$$ and $...$) from markdown mangling
+      const mathBlocks = [];
+      str = str.replace(/(\$\$[\s\S]*?\$\$|\$[^\$\n]+?\$|\\\[[\s\S]*?\\\]|\\\(.*?\\\))/g, (match) => {
+        mathBlocks.push(match);
+        return `@@MATH_${mathBlocks.length - 1}@@`;
+      });
+
+      // 1. Triple asterisks ***bold italic***
+      str = str.replace(/\*\*\*([^\*\n]+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+      // 2. Bold with italic at end: **text *italic***
+      str = str.replace(/\*\*([^\*\n]+?)\*([^\*\n]+?)\*\*\*/g, '<strong>$1<em>$2</em></strong>');
+      // 3. Bold with italic at start: ***italic* text**
+      str = str.replace(/\*\*\*([^\*\n]+?)\*([^\*\n]+?)\*\*/g, '<strong><em>$1</em>$2</strong>');
+      // 4. General bold: **...**
+      str = str.replace(/\*\*([\s\S]+?)\*\*/g, '<strong>$1</strong>');
+      str = str.replace(/__([\s\S]+?)__/g, '<strong>$1</strong>');
+      // 5. General italic: *...*
+      str = str.replace(/(?<![\w\*])\*([^\*\n]+?)\*(?![\w\*])/g, '<em>$1</em>');
+      // 6. Backtick `code`
+      str = str.replace(/`([^`]+?)`/g, '<code class="px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-xs font-mono">$1</code>');
+      // 7. Links: [text](url)
+      str = str.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-600 dark:text-blue-400 underline">$1</a>');
+
+      if (inline) {
+        return str.replace(/@@MATH_(\d+)@@/g, (_, i) => mathBlocks[Number(i)]).replace(/\n+/g, ' ').trim();
+      }
+
+      // Handle Markdown Tables
+      if (str.includes('|')) {
+        const lines = str.split('\n');
+        let inTable = false;
+        let tableHtml = '';
+        const newLines = [];
+
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (line.startsWith('|') && line.endsWith('|')) {
+            if (!inTable) {
+              inTable = true;
+              tableHtml = '<div class="overflow-x-auto my-3"><table class="w-full text-xs sm:text-sm text-left border-collapse border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">';
+              const cells = line.slice(1, -1).split('|').map(c => `<th class="border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 p-2.5 font-bold">${c.trim()}</th>`).join('');
+              tableHtml += `<thead><tr>${cells}</tr></thead><tbody>`;
+              if (i + 1 < lines.length && /^\|[-:\s|]+\|$/.test(lines[i + 1].trim())) {
+                i++;
+              }
+            } else {
+              const cells = line.slice(1, -1).split('|').map(c => `<td class="border border-slate-200 dark:border-slate-700 p-2.5">${c.trim()}</td>`).join('');
+              tableHtml += `<tr>${cells}</tr>`;
+            }
+          } else {
+            if (inTable) {
+              tableHtml += '</tbody></table></div>';
+              newLines.push(tableHtml);
+              inTable = false;
+              tableHtml = '';
+            }
+            newLines.push(line);
+          }
+        }
+        if (inTable) {
+          tableHtml += '</tbody></table></div>';
+          newLines.push(tableHtml);
+        }
+        str = newLines.join('\n');
+      }
+
+      // Handle Paragraphs & Lists
+      const paragraphs = str.split(/\n\s*\n/);
+      const formattedHtml = paragraphs.map(p => {
+        p = p.trim();
+        if (!p) return '';
+        if (p.startsWith('<div class="overflow-x-auto')) return p;
+        
+        if (p.startsWith('- ') || p.startsWith('* ')) {
+          const items = p.split('\n').filter(line => line.trim());
+          const listItems = items.map(line => {
+            const itemContent = line.replace(/^[-*]\s+/, '').trim();
+            return `<li class="ml-4 list-disc">${itemContent}</li>`;
+          }).join('');
+          return `<ul class="my-2 space-y-1">${listItems}</ul>`;
+        }
+        
+        if (/^\d+\.\s+/.test(p)) {
+          const items = p.split('\n').filter(line => line.trim());
+          const listItems = items.map(line => {
+            const itemContent = line.replace(/^\d+\.\s+/, '').trim();
+            return `<li class="ml-4 list-decimal">${itemContent}</li>`;
+          }).join('');
+          return `<ol class="my-2 space-y-1">${listItems}</ol>`;
+        }
+
+        return `<p class="mb-2 leading-relaxed">${p.replace(/\n/g, '<br>')}</p>`;
+      }).join('');
+
+      return formattedHtml.replace(/@@MATH_(\d+)@@/g, (_, i) => mathBlocks[Number(i)]);
+    }
+
     function renderMathInElement(elem) {
       if (window.renderMathInElement) {
         window.renderMathInElement(elem, {
@@ -863,7 +971,7 @@
             <span class="w-6 h-6 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 font-bold text-xs flex items-center justify-center shrink-0 mt-0.5 text-slate-600 dark:text-slate-300">
               ${optKey}
             </span>
-            <span class="flex-1 leading-relaxed">${optText}</span>
+            <span class="flex-1 leading-relaxed">${renderRich(optText, true)}</span>
           </button>
         `;
       }).join('');
@@ -891,7 +999,7 @@
 
           <!-- Question Text -->
           <div class="text-sm sm:text-base font-serif-title leading-relaxed text-slate-800 dark:text-slate-100">
-            ${marked.parse(q.question)}
+            ${renderRich(q.question)}
           </div>
 
           <!-- Options -->
@@ -915,7 +1023,7 @@
               ${q.reference ? `
                 <div>
                   <div class="text-xs uppercase font-bold text-slate-400 tracking-wider">Primary Textual Reference</div>
-                  <div class="text-slate-700 dark:text-slate-300 font-medium mt-0.5">${q.reference}</div>
+                  <div class="text-slate-700 dark:text-slate-300 font-medium mt-0.5">${renderRich(q.reference, true)}</div>
                 </div>
               ` : ''}
 
@@ -923,7 +1031,7 @@
               <div>
                 <div class="text-xs uppercase font-bold text-slate-400 tracking-wider">Philosophical Grounding & Derivation</div>
                 <div class="text-slate-700 dark:text-slate-300 mt-1 leading-relaxed prose dark:prose-invert max-w-none text-xs sm:text-sm">
-                  ${marked.parse(q.grounding)}
+                  ${renderRich(q.grounding)}
                 </div>
               </div>
 
@@ -931,7 +1039,7 @@
               <div>
                 <div class="text-xs uppercase font-bold text-slate-400 tracking-wider">Exhaustive Distractor Diagnosis (Option-by-Option)</div>
                 <div class="text-slate-600 dark:text-slate-400 mt-1 leading-relaxed prose dark:prose-invert max-w-none text-xs sm:text-sm">
-                  ${marked.parse(q.distractor_analysis)}
+                  ${renderRich(q.distractor_analysis)}
                 </div>
               </div>
             </div>
@@ -1038,7 +1146,7 @@
       document.getElementById('exam-q-domain').textContent = q.domain || 'Philosophy';
 
       const textEl = document.getElementById('exam-q-text');
-      textEl.innerHTML = marked.parse(q.question);
+      textEl.innerHTML = renderRich(q.question);
 
       const optionsContainer = document.getElementById('exam-q-options');
       const currentSelected = state.examState.responses[qIndex];
@@ -1052,7 +1160,7 @@
             <span class="w-6 h-6 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 font-bold text-xs flex items-center justify-center shrink-0 text-slate-700 dark:text-slate-200">
               ${optKey}
             </span>
-            <span class="flex-1 leading-relaxed">${optText}</span>
+            <span class="flex-1 leading-relaxed">${renderRich(optText, true)}</span>
           </label>
         `;
       }).join('');
@@ -1226,7 +1334,7 @@
             </div>
 
             <div class="text-sm font-serif-title text-slate-800 dark:text-slate-100">
-              ${marked.parse(q.question)}
+              ${renderRich(q.question)}
             </div>
 
             <!-- Options comparison -->
@@ -1240,7 +1348,7 @@
 
                 return `
                   <div class="p-3 rounded-lg border ${cardStyle}">
-                    <span class="font-bold mr-1">(${optKey})</span> ${q.options[optKey] || ''}
+                    <span class="font-bold mr-1">(${optKey})</span> ${renderRich(q.options[optKey] || '', true)}
                     ${isKey ? '<span class="ml-1 text-[10px] font-bold uppercase text-emerald-600">[Key]</span>' : ''}
                     ${isSelected ? '<span class="ml-1 text-[10px] font-bold uppercase text-blue-600">[Your Choice]</span>' : ''}
                   </div>
@@ -1259,13 +1367,13 @@
               <div>
                 <div class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Philosophical Grounding</div>
                 <div class="text-slate-700 dark:text-slate-300 mt-1 leading-relaxed prose dark:prose-invert max-w-none text-xs sm:text-sm">
-                  ${marked.parse(q.grounding)}
+                  ${renderRich(q.grounding)}
                 </div>
               </div>
               <div>
                 <div class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Distractor Diagnosis</div>
                 <div class="text-slate-600 dark:text-slate-400 mt-1 leading-relaxed prose dark:prose-invert max-w-none text-xs sm:text-sm">
-                  ${marked.parse(q.distractor_analysis)}
+                  ${renderRich(q.distractor_analysis)}
                 </div>
               </div>
             </div>
